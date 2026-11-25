@@ -316,6 +316,25 @@
   .shape.on { border-color: var(--accent); background: var(--accent-soft); }
   .shape.on small { color: #ffd99a; }
 
+  /* ---------- Região do teclado ---------- */
+  .piano-range { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+  .range-ctl { display: flex; align-items: center; gap: 8px; }
+  .range-ctl button { height: 32px; padding: 0 11px; font-size: 12.5px; gap: 5px; }
+  .range-ctl button svg { width: 14px; height: 14px; }
+  .range-ctl button:disabled { opacity: .35; cursor: not-allowed; }
+  .range-map { display: flex; gap: 3px; padding: 3px; border-radius: 9px; background: var(--bg); border: 1px solid var(--line-2); }
+  .range-map .oc {
+    width: 46px; height: 24px; border-radius: 6px; display: grid; place-items: center; cursor: pointer;
+    font-size: 11px; font-weight: 600; color: var(--text-3); background: var(--surface-2);
+    background-image: repeating-linear-gradient(90deg, transparent 0 5px, rgba(255,255,255,0.04) 5px 6px);
+    transition: background-color .15s, color .15s;
+  }
+  .range-map .oc:hover { color: var(--text); background-color: var(--surface-3); }
+  .range-map .oc.in { background-color: var(--accent-soft); color: #ffd99a; box-shadow: inset 0 0 0 1px var(--accent-line); }
+  .range-map .oc.has::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--accent); margin-left: 3px; }
+  .range-label { font-size: 12px; color: var(--text-2); min-width: 92px; text-align: right; }
+  body.guitar .piano-only { display: none; }
+
   /* ---------- Progressão e loop ---------- */
   .seq-info { font-size: 11.5px; color: var(--text-3); margin-left: 6px; }
   .transport .tgroup:last-child { flex: 1; }
@@ -542,6 +561,19 @@
     </div>
 
     <div class="piano-area view" id="pianoView">
+      <div class="piano-range">
+        <span class="eyebrow">Região do teclado</span>
+        <div class="range-ctl">
+          <button id="octDown" title="Descer o teclado uma oitava (Z)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>Grave
+          </button>
+          <div class="range-map" id="rangeMap" title="Clique numa oitava para mover o teclado"></div>
+          <button id="octUp" title="Subir o teclado uma oitava (X)">
+            Agudo<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+        <span class="range-label mono" id="rangeLabel">Dó3 – Dó6</span>
+      </div>
       <div class="piano-case">
         <div class="felt"></div>
         <div class="piano" id="piano"></div>
@@ -559,6 +591,7 @@
         <span><kbd>A</kbd>arpejar</span>
         <span><kbd>↑</kbd><kbd>↓</kbd>transpor</span>
         <span><kbd>Esc</kbd>limpar</span>
+        <span class="piano-only"><kbd>Z</kbd><kbd>X</kbd>oitava</span>
         <span><kbd>S</kbd>salvar</span>
         <span><kbd>L</kbd>loop</span>
       </div>
@@ -678,8 +711,12 @@
   const { Note, Chord, Interval, Scale } = Tonal;
 
   // ---------- Configuração ----------
-  const LOW = 48;   // C3
-  const HIGH = 84;  // C6
+  // Região visível do teclado: 3 oitavas a partir de Dó{startOct} (Dó1 a Dó7 no total)
+  const MIN_OCT = 1, MAX_OCT = 4;
+  let startOct = Math.min(MAX_OCT, Math.max(MIN_OCT, +localStorage.getItem('harmonia.octave') || 3));
+  let LOW = (startOct + 1) * 12;   // Dó3 = 48
+  let HIGH = LOW + 36;             // Dó6 = 84
+  const rangeText = () => `Dó${startOct} a Dó${startOct + 3}`;
   const TUNING = [40, 45, 50, 55, 59, 64];          // E2 A2 D3 G3 B3 E4 (índice 0 = 6ª corda)
   const STR_NAMES = ['Mi', 'Lá', 'Ré', 'Sol', 'Si', 'Mi'];
   const STR_THICK = [3.4, 2.9, 2.4, 1.9, 1.5, 1.2];
@@ -820,6 +857,7 @@
       const old = el.querySelector('.bass-tag'); if (old) old.remove();
       if (state.marked.size > 1 && m === sorted[0]) el.insertAdjacentHTML('afterbegin', '<span class="bass-tag">baixo</span>');
     }
+    renderRange();
   }
   function togglePiano(m) {
     if (state.marked.has(m)) state.marked.delete(m);
@@ -1277,6 +1315,41 @@
     if (diff !== 0) transpose(diff);
   }
 
+  // ---------- Região do teclado (subir / descer oitavas) ----------
+  // As notas marcadas acompanham o teclado: o acorde fica mais grave ou mais agudo.
+  function setOctave(o) {
+    o = Math.min(MAX_OCT, Math.max(MIN_OCT, o));
+    if (o === startOct) return;
+    const d = (o - startOct) * 12;
+    startOct = o; LOW = (o + 1) * 12; HIGH = LOW + 36;
+    state.marked = new Set([...state.marked].map(m => m + d));
+    try { localStorage.setItem('harmonia.octave', o); } catch (e) {}
+    buildPiano();
+    renderRange();
+    update();
+    if (state.marked.size && !seq.playing) play(currentEvents(), 'chord');
+  }
+  function renderRange() {
+    const map = $('rangeMap');
+    const used = new Set([...state.marked].map(m => Math.floor(m / 12) - 1));
+    map.innerHTML = Array.from({ length: MAX_OCT + 2 - MIN_OCT + 1 }, (_, i) => {
+      const oc = MIN_OCT + i;
+      const inside = oc >= startOct && oc < startOct + 3;
+      return `<span class="oc${inside ? ' in' : ''}${inside && used.has(oc) ? ' has' : ''}" data-oc="${oc}">Dó${oc}</span>`;
+    }).join('');
+    map.querySelectorAll('.oc').forEach(el => el.onclick = () => {
+      const oc = +el.dataset.oc;
+      if (oc < startOct) setOctave(oc);
+      else if (oc >= startOct + 3) setOctave(oc - 2);
+    });
+    $('rangeLabel').textContent = rangeText().replace(' a ', ' – ');
+    $('octDown').disabled = startOct <= MIN_OCT;
+    $('octUp').disabled = startOct >= MAX_OCT;
+    if (state.inst === 'piano') $('footHint').textContent = `Clique nas teclas para marcar ou desmarcar · ${rangeText()}`;
+  }
+  $('octDown').onclick = () => setOctave(startOct - 1);
+  $('octUp').onclick = () => setOctave(startOct + 1);
+
   function foldToPiano(notes) {
     let ns = [...notes];
     while (Math.min(...ns) < LOW && Math.max(...ns) + 12 <= HIGH) ns = ns.map(m => m + 12);
@@ -1302,7 +1375,7 @@
     $('pianoView').hidden = inst !== 'piano';
     $('guitarView').hidden = inst !== 'guitar';
     $('footHint').textContent = inst === 'piano'
-      ? 'Clique nas teclas para marcar ou desmarcar · Dó3 a Dó6'
+      ? `Clique nas teclas para marcar ou desmarcar · ${rangeText()}`
       : 'Clique numa casa para escolher a nota da corda · clique de novo para abafar · clique no nome da corda para solta/abafada';
     $('btnPlay').lastChild.textContent = inst === 'piano' ? 'Tocar acorde' : 'Tocar (rasgueado)';
     document.title = `Harmonia · ${inst === 'piano' ? 'Teclado' : 'Violão'}`;
@@ -1349,6 +1422,8 @@
     else if (e.key === 'Escape') $('btnClear').click();
     else if (e.key === 's' || e.key === 'S') saveCurrent();
     else if (e.key === 'l' || e.key === 'L') togglePlay();
+    else if ((e.key === 'z' || e.key === 'Z') && state.inst === 'piano') setOctave(startOct - 1);
+    else if ((e.key === 'x' || e.key === 'X') && state.inst === 'piano') setOctave(startOct + 1);
   });
 
   // =====================================================================
